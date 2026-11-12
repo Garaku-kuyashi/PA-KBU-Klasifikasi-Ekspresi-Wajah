@@ -1,19 +1,19 @@
-import json
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
+import json
+import tensorflow as tf
 import cv2
 import numpy as np
 import streamlit as st
-import tensorflow as tf
 from PIL import Image, ImageOps
 
-# streamlit-webrtc bersifat opsional: jika gagal diimpor, mode lain tetap berjalan.
-try:
-    import av
-    from streamlit_webrtc import RTCConfiguration, VideoProcessorBase, WebRtcMode, webrtc_streamer
-    WEBRTC_OK = True
-except Exception:  # pragma: no cover
-    WEBRTC_OK = False
+# Matikan WebRTC di server cloud agar tidak bentrok memori dengan TensorFlow
+WEBRTC_OK = False
 
 # ==============================================================================
 # 1. KONFIGURASI HALAMAN
@@ -172,36 +172,7 @@ def analyze_image(img_bgr, scale_factor, min_neighbors, min_size, allow_whole_im
 
 
 # ==============================================================================
-# 4. WEBCAM REAL-TIME (WebRTC)
-# ==============================================================================
-if WEBRTC_OK:
-    class EmotionProcessor(VideoProcessorBase):
-        PREDICT_EVERY = 3  # prediksi tiap 3 frame agar video tetap lancar
-
-        def __init__(self):
-            self.frame_idx = 0
-            self.last = []  # [(label, conf), ...] sesuai urutan wajah terakhir
-
-        def recv(self, frame):
-            img = frame.to_ndarray(format="bgr24")
-            boxes = detect_faces(img, scale_factor=1.2, min_neighbors=5, min_size=60)
-
-            need_predict = (self.frame_idx % self.PREDICT_EVERY == 0) or (len(boxes) != len(self.last))
-            if boxes and need_predict:
-                probs = predict_faces([img[y:y + h, x:x + w] for (x, y, w, h) in boxes])
-                self.last = [(class_names[int(np.argmax(p))], float(np.max(p))) for p in probs]
-            elif not boxes:
-                self.last = []
-
-            for box, (label, conf) in zip(boxes, self.last):
-                draw_result(img, box, label, conf)
-
-            self.frame_idx += 1
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-
-# ==============================================================================
-# 5. SIDEBAR
+# 4. SIDEBAR
 # ==============================================================================
 st.title("🎭 Klasifikasi Ekspresi Wajah (FER-2013)")
 st.caption("Proyek Akhir Kecerdasan Buatan — model Custom CNN (tanpa transfer learning)")
@@ -210,8 +181,6 @@ st.sidebar.success("✅ Model Custom CNN berhasil dimuat")
 st.sidebar.header("⚙️ Pengaturan")
 
 modes = ["Upload Gambar", "Kamera (Ambil Foto)"]
-if WEBRTC_OK:
-    modes.append("Webcam Real-Time")
 mode = st.sidebar.radio("Pilih sumber input:", modes)
 
 with st.sidebar.expander("Pengaturan deteksi wajah"):
@@ -233,7 +202,7 @@ with st.sidebar.expander("ℹ️ Tentang model & keterbatasan"):
 st.write("---")
 
 # ==============================================================================
-# 6. MODE-MODE INPUT
+# 5. MODE-MODE INPUT
 # ==============================================================================
 if mode == "Upload Gambar":
     st.subheader("🖼️ Deteksi ekspresi dari file gambar")
@@ -252,19 +221,3 @@ elif mode == "Kamera (Ambil Foto)":
     shot = st.camera_input("Arahkan wajah ke kamera lalu ambil foto")
     if shot is not None:
         analyze_image(pil_to_bgr(Image.open(shot)), scale_factor, min_neighbors, min_size, allow_whole)
-
-else:  # Webcam Real-Time
-    st.subheader("📹 Deteksi ekspresi real-time via webcam")
-    st.info("Tekan **START** lalu izinkan akses kamera. Jika video tidak muncul (jaringan tertentu memblokir WebRTC), "
-            "gunakan mode **Kamera (Ambil Foto)**.")
-    rtc_config = RTCConfiguration({"iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
-    ]})
-    webrtc_streamer(
-        key="fer-realtime",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=rtc_config,
-        video_processor_factory=EmotionProcessor,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-    )
